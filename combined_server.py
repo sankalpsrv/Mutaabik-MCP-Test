@@ -3,9 +3,13 @@ import httpx
 import os
 import asyncio
 import uvicorn
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 from mcp.server.fastmcp import FastMCP
+from mcp.server.sse import SseServerTransport
+from mcp.server.stdio import StdioServerTransport
+from mcp.server import Server
+import json
 from langchain.prompts import PromptTemplate, FewShotPromptTemplate
 from langchain.prompts.example_selector import SemanticSimilarityExampleSelector
 from langchain_community.vectorstores import FAISS
@@ -176,6 +180,40 @@ async def natural_language_query(question: str) -> str:
     except Exception as e:
         return f"Error processing natural language query: {str(e)}"
 
+# Create a standard MCP server for SSE transport
+def create_mcp_server():
+    server = Server("azure-mcp-server")
+    
+    @server.list_tools()
+    async def handle_list_tools() -> list[dict]:
+        return [
+            {
+                "name": "natural_language_query",
+                "description": "Convert a natural language question into a SPARQL query, execute it, and return formatted results",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "description": "Natural language question about the Wikibase data"
+                        }
+                    },
+                    "required": ["question"]
+                }
+            }
+        ]
+    
+    @server.call_tool()
+    async def handle_call_tool(name: str, arguments: dict) -> list[dict]:
+        if name == "natural_language_query":
+            question = arguments.get("question", "")
+            result = await natural_language_query(question)
+            return [{"type": "text", "text": result}]
+        else:
+            raise ValueError(f"Unknown tool: {name}")
+    
+    return server
+
 # FastAPI app for HTTP server mode
 app = FastAPI(title="Azure MCP Server", description="Wikibase MCP Server")
 
@@ -186,6 +224,39 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
+
+@app.get("/sse")
+async def handle_sse():
+    """SSE endpoint for MCP transport"""
+    server = create_mcp_server()
+    sse_transport = SseServerTransport("/message", server)
+    
+    async def event_publisher():
+        try:
+            async for message in sse_transport.run():
+                yield f"data: {json.dumps(message)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+    
+    return StreamingResponse(
+        event_publisher(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+        }
+    )
+
+@app.post("/message")
+async def handle_message(request: Request):
+    """Handle MCP messages via POST for SSE transport"""
+    server = create_mcp_server()
+    sse_transport = SseServerTransport("/message", server)
+    
+    message = await request.json()
+    response = await sse_transport.handle_request(message)
+    return JSONResponse(content=response)
 
 if __name__ == "__main__":
     import sys
