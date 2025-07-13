@@ -227,13 +227,15 @@ async def health():
 @app.get("/sse")
 async def handle_sse():
     """SSE endpoint for MCP transport"""
-    server = create_mcp_server()
-    sse_transport = SseServerTransport("/message", server)
-    
     async def event_publisher():
         try:
-            async for message in sse_transport.run():
-                yield f"data: {json.dumps(message)}\n\n"
+            # Send initial connection event
+            yield f"data: {json.dumps({'type': 'connection', 'status': 'connected'})}\n\n"
+            
+            # Keep connection alive
+            while True:
+                await asyncio.sleep(30)  # Send heartbeat every 30 seconds
+                yield f"data: {json.dumps({'type': 'heartbeat', 'timestamp': asyncio.get_event_loop().time()})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
     
@@ -249,21 +251,77 @@ async def handle_sse():
 
 @app.post("/message")
 async def handle_message(request: Request):
-    """Handle MCP messages via POST for SSE transport"""
-    server = create_mcp_server()
-    sse_transport = SseServerTransport("/message", server)
+    """Handle MCP messages via POST"""
+    try:
+        message = await request.json()
+        
+        # Handle different MCP message types
+        if message.get("method") == "tools/list":
+            tools = [
+                {
+                    "name": "natural_language_query",
+                    "description": "Convert a natural language question into a SPARQL query, execute it, and return formatted results",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "question": {
+                                "type": "string",
+                                "description": "Natural language question about the Wikibase data"
+                            }
+                        },
+                        "required": ["question"]
+                    }
+                }
+            ]
+            return JSONResponse(content={
+                "jsonrpc": "2.0",
+                "id": message.get("id"),
+                "result": {"tools": tools}
+            })
+        
+        elif message.get("method") == "tools/call":
+            params = message.get("params", {})
+            tool_name = params.get("name")
+            arguments = params.get("arguments", {})
+            
+            if tool_name == "natural_language_query":
+                question = arguments.get("question", "")
+                result = await natural_language_query(question)
+                return JSONResponse(content={
+                    "jsonrpc": "2.0",
+                    "id": message.get("id"),
+                    "result": {
+                        "content": [{"type": "text", "text": result}]
+                    }
+                })
+            else:
+                return JSONResponse(content={
+                    "jsonrpc": "2.0",
+                    "id": message.get("id"),
+                    "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"}
+                })
+        
+        else:
+            return JSONResponse(content={
+                "jsonrpc": "2.0",
+                "id": message.get("id"),
+                "error": {"code": -32601, "message": f"Unknown method: {message.get('method')}"}
+            })
     
-    message = await request.json()
-    response = await sse_transport.handle_request(message)
-    return JSONResponse(content=response)
+    except Exception as e:
+        return JSONResponse(content={
+            "jsonrpc": "2.0",
+            "id": None,
+            "error": {"code": -32603, "message": str(e)}
+        })
 
 
 if __name__ == "__main__":
     import sys
 
     if len(sys.argv) > 1 and sys.argv[1] == "server":
-        # Run as HTTP server using FastMCP's built-in server
-        mcp.run(transport='sse', port=8000)
+        # Run as HTTP server with SSE support
+        uvicorn.run(app, host="0.0.0.0", port=8000)
     else:
         # Run as MCP stdio server
         mcp.run(transport='stdio')
