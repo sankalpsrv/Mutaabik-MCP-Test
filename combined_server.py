@@ -7,7 +7,6 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from mcp.server.fastmcp import FastMCP
 from mcp.server.sse import SseServerTransport
-from mcp.server.stdio import StdioServerTransport
 from mcp.server import Server
 import json
 from langchain.prompts import PromptTemplate, FewShotPromptTemplate
