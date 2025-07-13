@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Create an MCP Server instance globally
-mcp = FastMCP("mutaabik-mcp-server", stateless_http=True)
+mcp = FastMCP("mutaabik-mcp-server")
 
 # Wikibase Constants
 WIKIBASE_BASE_URL = "https://mutaabiklegalresearch.wikibase.cloud"
@@ -213,4 +213,4 @@ async def natural_language_query(question: str) -> str:
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 8000))
 
-    mcp.run()
+    mcp.run(transport="http", port=8000, host="0.0.0.0", log_level="debug")
