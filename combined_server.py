@@ -13,14 +13,26 @@ from langchain.prompts import PromptTemplate, FewShotPromptTemplate
 from langchain.prompts.example_selector import SemanticSimilarityExampleSelector
 from langchain_community.vectorstores import FAISS
 from langchain_openai import AzureOpenAIEmbeddings
+from wikibaseintegrator.wbi_config import config as wbi_config
+from wikibaseintegrator.wbi_helpers import execute_sparql_query
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Initialize FastMCP server for wikibase functionality
 mcp = FastMCP("azure-mcp-server")
 
 # Wikibase Constants
 WIKIBASE_BASE_URL = "https://mutaabiklegalresearch.wikibase.cloud"
-SPARQL_ENDPOINT = f"{WIKIBASE_BASE_URL}/query/"
+SPARQL_ENDPOINT = f"{WIKIBASE_BASE_URL}/query/sparql"
 WIKIBASE_USER_AGENT = os.getenv("USER_AGENT", "WikibaseMCPTest/1.0")
+
+# Configure wikibaseintegrator
+wbi_config['MEDIAWIKI_API_URL'] = 'https://mutaabiklegalresearch.wikibase.cloud/w/api.php'
+wbi_config['SPARQL_ENDPOINT_URL'] = "https://mutaabiklegalresearch.wikibase.cloud/query/sparql"
+wbi_config['WIKIBASE_URL'] = 'https://mutaabiklegalresearch.wikibase.cloud'
+wbi_config['USER_AGENT'] = WIKIBASE_USER_AGENT
 
 # SPARQL examples for few-shot learning
 SPARQL_EXAMPLES = [
@@ -97,21 +109,34 @@ class WikibaseGraphRAG:
 # Initialize the GraphRAG system
 graph_rag = WikibaseGraphRAG()
 
-async def execute_sparql_query(query: str) -> dict[str, Any] | None:
-    """Execute a SPARQL query against the Wikibase instance."""
-    headers = {
-        "User-Agent": WIKIBASE_USER_AGENT,
-        "Accept": "application/sparql-results+json"
-    }
-    data = {"query": query}
-    
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(SPARQL_ENDPOINT, data=data, headers=headers, timeout=30.0)
-            response.raise_for_status()
-            return response.json()
-        except Exception:
-            return None
+async def execute_wikibase_sparql_query(query: str) -> dict[str, Any] | None:
+    """Execute a SPARQL query against the Wikibase instance using wikibaseintegrator."""
+    try:
+        # Execute the SPARQL query using wikibaseintegrator
+        endpoint = SPARQL_ENDPOINT
+        user_agent = WIKIBASE_USER_AGENT
+        max_retries = 2
+        
+        # Call the wikibaseintegrator function in a thread since it's synchronous
+        import asyncio
+        import functools
+        
+        loop = asyncio.get_event_loop()
+        results = await loop.run_in_executor(
+            None, 
+            functools.partial(
+                execute_sparql_query, 
+                query=query, 
+                endpoint=endpoint, 
+                user_agent=user_agent, 
+                max_retries=max_retries
+            )
+        )
+        
+        return results
+    except Exception as e:
+        print(f"Error executing SPARQL query: {e}")
+        return None
 
 def format_sparql_results(data: dict) -> str:
     """Format SPARQL query results into a readable string."""
@@ -166,7 +191,7 @@ async def natural_language_query(question: str) -> str:
         sparql_query = await graph_rag.generate_sparql_query(question)
         
         # Execute the SPARQL query
-        results = await execute_sparql_query(sparql_query)
+        results = await execute_wikibase_sparql_query(sparql_query)
         
         if not results:
             return f"Selected SPARQL query:\n{sparql_query}\n\nError: Unable to execute query or connection failed."

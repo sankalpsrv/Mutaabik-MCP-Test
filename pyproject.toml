@@ -13,5 +13,7 @@ dependencies = [
     "langchain-openai>=0.3.27",
     "mcp[cli]>=1.11.0",
     "openai>=1.95.1",
+    "python-dotenv>=1.0.0",
     "uvicorn>=0.24.0",
+    "wikibaseintegrator>=0.12.0",
 ]
