@@ -249,80 +249,23 @@ async def handle_sse():
         }
     )
 
-@app.post("/message")
-async def handle_message(request: Request):
-    """Handle MCP messages via POST and return SSE stream"""
-    async def message_handler():
+@app.get("/message")
+async def handle_message_get():
+    """Handle MCP SSE connection - GET request establishes the stream"""
+    async def message_stream():
         try:
-            message = await request.json()
+            # Send initial connection event
+            yield f"data: {json.dumps({'type': 'connection', 'status': 'connected'})}\n\n"
             
-            # Handle different MCP message types
-            if message.get("method") == "tools/list":
-                tools = [
-                    {
-                        "name": "natural_language_query",
-                        "description": "Convert a natural language question into a SPARQL query, execute it, and return formatted results",
-                        "inputSchema": {
-                            "type": "object",
-                            "properties": {
-                                "question": {
-                                    "type": "string",
-                                    "description": "Natural language question about the Wikibase data"
-                                }
-                            },
-                            "required": ["question"]
-                        }
-                    }
-                ]
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": message.get("id"),
-                    "result": {"tools": tools}
-                }
-                yield f"data: {json.dumps(response)}\n\n"
-            
-            elif message.get("method") == "tools/call":
-                params = message.get("params", {})
-                tool_name = params.get("name")
-                arguments = params.get("arguments", {})
-                
-                if tool_name == "natural_language_query":
-                    question = arguments.get("question", "")
-                    result = await natural_language_query(question)
-                    response = {
-                        "jsonrpc": "2.0",
-                        "id": message.get("id"),
-                        "result": {
-                            "content": [{"type": "text", "text": result}]
-                        }
-                    }
-                    yield f"data: {json.dumps(response)}\n\n"
-                else:
-                    response = {
-                        "jsonrpc": "2.0",
-                        "id": message.get("id"),
-                        "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"}
-                    }
-                    yield f"data: {json.dumps(response)}\n\n"
-            
-            else:
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": message.get("id"),
-                    "error": {"code": -32601, "message": f"Unknown method: {message.get('method')}"}
-                }
-                yield f"data: {json.dumps(response)}\n\n"
-        
+            # Keep connection alive with periodic heartbeats
+            while True:
+                await asyncio.sleep(30)
+                yield f"data: {json.dumps({'type': 'heartbeat', 'timestamp': asyncio.get_event_loop().time()})}\n\n"
         except Exception as e:
-            response = {
-                "jsonrpc": "2.0",
-                "id": None,
-                "error": {"code": -32603, "message": str(e)}
-            }
-            yield f"data: {json.dumps(response)}\n\n"
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
     
     return StreamingResponse(
-        message_handler(),
+        message_stream(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -330,6 +273,72 @@ async def handle_message(request: Request):
             "Access-Control-Allow-Origin": "*",
         }
     )
+
+@app.post("/message")
+async def handle_message_post(request: Request):
+    """Handle MCP messages via POST and return JSON response"""
+    try:
+        message = await request.json()
+        
+        # Handle different MCP message types
+        if message.get("method") == "tools/list":
+            tools = [
+                {
+                    "name": "natural_language_query",
+                    "description": "Convert a natural language question into a SPARQL query, execute it, and return formatted results",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "question": {
+                                "type": "string",
+                                "description": "Natural language question about the Wikibase data"
+                            }
+                        },
+                        "required": ["question"]
+                    }
+                }
+            ]
+            return JSONResponse(content={
+                "jsonrpc": "2.0",
+                "id": message.get("id"),
+                "result": {"tools": tools}
+            })
+        
+        elif message.get("method") == "tools/call":
+            params = message.get("params", {})
+            tool_name = params.get("name")
+            arguments = params.get("arguments", {})
+            
+            if tool_name == "natural_language_query":
+                question = arguments.get("question", "")
+                result = await natural_language_query(question)
+                return JSONResponse(content={
+                    "jsonrpc": "2.0",
+                    "id": message.get("id"),
+                    "result": {
+                        "content": [{"type": "text", "text": result}]
+                    }
+                })
+            else:
+                return JSONResponse(content={
+                    "jsonrpc": "2.0",
+                    "id": message.get("id"),
+                    "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"}
+                })
+        
+        else:
+            return JSONResponse(content={
+                "jsonrpc": "2.0",
+                "id": message.get("id"),
+                "error": {"code": -32601, "message": f"Unknown method: {message.get('method')}"}
+            })
+    
+    except Exception as e:
+        return JSONResponse(content={
+            "jsonrpc": "2.0",
+            "id": None,
+            "error": {"code": -32603, "message": str(e)}
+        })
 
 
 if __name__ == "__main__":
